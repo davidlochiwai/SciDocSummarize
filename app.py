@@ -147,7 +147,7 @@ if st.session_state['authenticated']:
             
             stream_handler = StreamHandler(output_placeholder, display_method='write')
             
-            if len(tokens) > 120000:
+            if len(tokens) <= 120000:
                 # Use Stuff Method for summarization
                 
                 # Define prompt
