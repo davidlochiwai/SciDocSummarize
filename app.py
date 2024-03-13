@@ -43,6 +43,32 @@ if 'search_result' not in st.session_state:
 if 'authenticated' not in st.session_state:
     st.session_state['authenticated'] = False
 
+def display_summary(summary_text):
+    # Using larger font size for the title with HTML
+    st.markdown("""
+        <style>
+        .summary-title {
+            font-size: 24px;
+            font-weight: bold;
+        }
+        .summary-box {
+            border: 1px solid #aaa;
+            border-radius: 5px;
+            padding: 10px;
+            margin: 20px 0px;
+            background-color: #f9f9f9;
+        }
+        </style>
+        <div class="summary-title">Document Summary</div>
+    """, unsafe_allow_html=True)
+    
+    # Box around the summary
+    st.markdown(f"""
+        <div class="summary-box">
+            {summary_text}
+        </div>
+    """, unsafe_allow_html=True)
+
 # Set up Streamlit layout and interface elements
 st.set_page_config(
     page_title="ArXiv Document Search and Summarization",
@@ -62,8 +88,10 @@ if st.session_state['authenticated']:
     st.session_state.sort_method = st.sidebar.radio("Sorting Method of the Search", ["Relevance", "Submission Date"])
 
     # Main page for search
-    st.title('ArXiv Document Search and Summarization')
-    search_keywords = st.text_input('Input keywords for searching (e.g. artificial intelligence)', '')
+    st.markdown("""
+        <h1 style='font-size: 24px;'>ArXiv Document Search and Summarization</h1>
+    """, unsafe_allow_html=True)
+    search_keywords = st.text_input('Input keywords for document search (e.g. artificial intelligence)', '')
 
     def ArXiv_Search(keywords):
         sort_criteria = arxiv.SortCriterion.SubmittedDate if st.session_state.sort_method == "Submission Date" else arxiv.SortCriterion.Relevance
@@ -92,103 +120,127 @@ if st.session_state['authenticated']:
             selected_title = st.radio("Select a document to summarize", titles, index=0)
 
     def download_and_summarize_document(selected_doc):
-        # Create directory if it doesn't exist
-        directory = './pdf_docs'
-        Path(directory).mkdir(parents=True, exist_ok=True)
+        # Placeholder for the progress bar
+        progress_placeholder = st.empty()
+        progress_bar = progress_placeholder.progress(0)
 
-        # Download PDF
-        target_id = selected_doc['id']
-        paper = next(arxiv.Client().results(arxiv.Search(id_list=[target_id])))
-        pdf_path = paper.download_pdf(directory)
-        
-        # Load PDF
-        loader = PyPDFLoader(pdf_path)
-        docs = loader.load()
-        
-        # Combine documents
-        pdf_text = " ".join(doc.page_content for doc in docs)
-        combined_doc = [Document(page_content=pdf_text)]
-        
-        # Tokenize and check length
-        tokenizer = tiktoken.get_encoding("cl100k_base")
-        tokens = tokenizer.encode(pdf_text)
-        
-        # Summarize based on token length
-        if len(tokens) <= 120000:
-            # Use Stuff Method for summarization
+
+        with st.spinner('Downloading and processing the document...'):
+            # Simulate progress
+            progress_bar.progress(10)
+
+            # Create directory if it doesn't exist
+            directory = './pdf_docs'
+            Path(directory).mkdir(parents=True, exist_ok=True)
+
+            # Download PDF
+            target_id = selected_doc['id']
+            paper = next(arxiv.Client().results(arxiv.Search(id_list=[target_id])))
+            pdf_path = paper.download_pdf(directory)
             
-            # Define prompt
-            prompt_template = """Write a concise summary of the following:
-            "{text}"
-            The summary should be structured in bulleted lists following the headings Core Argument, Evidence, and Conclusions.
-            CONCISE SUMMARY:"""
-            prompt = PromptTemplate.from_template(prompt_template)
+            # Update progress after downloading
+            progress_bar.progress(30)
 
-            # Define LLM chain
-            llm_chain = LLMChain(llm=llm, prompt=prompt)
-
-            # Define StuffDocumentsChain
-            stuff_chain = StuffDocumentsChain(llm_chain=llm_chain, document_variable_name="text")
+            # Load PDF
+            loader = PyPDFLoader(pdf_path)
+            docs = loader.load()
             
-            response = stuff_chain.invoke(combined_doc)
-        else:
-            # Use Map-Reduce Method for summarization
+            # Combine documents
+            pdf_text = " ".join(doc.page_content for doc in docs)
+            combined_doc = [Document(page_content=pdf_text)]
             
-            # Map
-            map_template = """The following is the content of a particular section of the document:
-            {docs}
-            Based on the content, please summarize key contents.
-            Helpful Answer:"""
-            map_prompt = PromptTemplate.from_template(map_template)
-            map_chain = LLMChain(llm=llm, prompt=map_prompt)
+            # Tokenize and check length
+            tokenizer = tiktoken.get_encoding("cl100k_base")
+            tokens = tokenizer.encode(pdf_text)
             
-            # Reduce
-            reduce_template = """The following is set of summaries:
-            {docs}
-            Take these and distill it into a final, consolidated summary of the main themes.
-            The summary should be structured in bulleted lists following the headings Core Argument, Evidence, and Conclusions.
-            Helpful Answer:"""
-            reduce_prompt = PromptTemplate.from_template(reduce_template)
+            # Update progress after downloading
+            progress_bar.progress(50)        
 
-            # Run chain
-            reduce_chain = LLMChain(llm=llm, prompt=reduce_prompt)
+            # Summarize based on token length
 
-            # Takes a list of documents, combines them into a single string, and passes this to an LLMChain
-            combine_documents_chain = StuffDocumentsChain(
-                llm_chain=reduce_chain, document_variable_name="docs"
-            )
+        with st.spinner('Summarizing document...'):
 
-            # Combines and iteratively reduces the mapped documents
-            reduce_documents_chain = ReduceDocumentsChain(
-                # This is final chain that is called.
-                combine_documents_chain=combine_documents_chain,
-                # If documents exceed context for `StuffDocumentsChain`
-                collapse_documents_chain=combine_documents_chain,
-                # The maximum number of tokens to group documents into.
-                token_max=120000,
-            )
+            if len(tokens) <= 120000:
+                # Use Stuff Method for summarization
+                
+                # Define prompt
+                prompt_template = """Write a concise summary of the following:
+                "{text}"
+                The summary should be structured in bulleted lists following the headings Core Argument, Evidence, and Conclusions.
+                CONCISE SUMMARY:"""
+                prompt = PromptTemplate.from_template(prompt_template)
 
-            # Combining documents by mapping a chain over them, then combining results
-            map_reduce_chain = MapReduceDocumentsChain(
-                # Map chain
-                llm_chain=map_chain,
-                # Reduce chain
-                reduce_documents_chain=reduce_documents_chain,
-                # The variable name in the llm_chain to put the documents in
-                document_variable_name="docs",
-                # Return the results of the map steps in the output
-                return_intermediate_steps=False,
-            )
+                # Define LLM chain
+                llm_chain = LLMChain(llm=llm, prompt=prompt)
 
-            text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-                chunk_size=120000, chunk_overlap=1000
-            )
-            split_docs = text_splitter.split_documents(combined_doc)
+                # Define StuffDocumentsChain
+                stuff_chain = StuffDocumentsChain(llm_chain=llm_chain, document_variable_name="text")
+                
+                response = stuff_chain.invoke(combined_doc)
+            else:
+                # Use Map-Reduce Method for summarization
+                
+                # Map
+                map_template = """The following is the content of a particular section of the document:
+                {docs}
+                Based on the content, please summarize key contents.
+                Helpful Answer:"""
+                map_prompt = PromptTemplate.from_template(map_template)
+                map_chain = LLMChain(llm=llm, prompt=map_prompt)
+                
+                # Reduce
+                reduce_template = """The following is set of summaries:
+                {docs}
+                Take these and distill it into a final, consolidated summary of the main themes.
+                The summary should be structured in bulleted lists following the headings Core Argument, Evidence, and Conclusions.
+                Helpful Answer:"""
+                reduce_prompt = PromptTemplate.from_template(reduce_template)
+
+                # Run chain
+                reduce_chain = LLMChain(llm=llm, prompt=reduce_prompt)
+
+                # Takes a list of documents, combines them into a single string, and passes this to an LLMChain
+                combine_documents_chain = StuffDocumentsChain(
+                    llm_chain=reduce_chain, document_variable_name="docs"
+                )
+
+                # Combines and iteratively reduces the mapped documents
+                reduce_documents_chain = ReduceDocumentsChain(
+                    # This is final chain that is called.
+                    combine_documents_chain=combine_documents_chain,
+                    # If documents exceed context for `StuffDocumentsChain`
+                    collapse_documents_chain=combine_documents_chain,
+                    # The maximum number of tokens to group documents into.
+                    token_max=120000,
+                )
+
+                # Combining documents by mapping a chain over them, then combining results
+                map_reduce_chain = MapReduceDocumentsChain(
+                    # Map chain
+                    llm_chain=map_chain,
+                    # Reduce chain
+                    reduce_documents_chain=reduce_documents_chain,
+                    # The variable name in the llm_chain to put the documents in
+                    document_variable_name="docs",
+                    # Return the results of the map steps in the output
+                    return_intermediate_steps=False,
+                )
+
+                text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+                    chunk_size=120000, chunk_overlap=1000
+                )
+                split_docs = text_splitter.split_documents(combined_doc)
+                
+                response = map_reduce_chain.invoke(split_docs)
             
-            response = map_reduce_chain.invoke(split_docs)
-        
-        # Display summary
-        st.markdown(f"### Document Summary\n{response['output_text']}")
+            # Complete the progress
+            progress_bar.progress(100)
+
+            # Clear the progress bar after completion
+            progress_placeholder.empty()           
+
+            # Display summary
+            display_summary(f"\n{response['output_text']}")
 
     with col2:
         if st.session_state.search_result and selected_title:
