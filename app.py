@@ -3,13 +3,14 @@ import streamlit as st
 import arxiv
 from pathlib import Path
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_openai import AzureChatOpenAI
+from langchain_openai import AzureChatOpenAI, ChatOpenAI
 from langchain.chains.combine_documents.stuff import StuffDocumentsChain
 from langchain.chains import MapReduceDocumentsChain, ReduceDocumentsChain
 from langchain.chains.llm import LLMChain
 from langchain.prompts import PromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
+from langchain.callbacks.base import BaseCallbackHandler
 import tiktoken
 from dotenv import load_dotenv
 from hashlib import sha256
@@ -25,14 +26,6 @@ stored_password = os.getenv("APP_PASSWORD")
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_PROJECT"] = "SDSC6002"
 
-# Set LLM
-llm = AzureChatOpenAI(
-    openai_api_version="2023-05-15",
-    azure_deployment="gpt-4-turbo-128K",
-    temperature=0,
-    seed=11
-)
-
 # Initialize session state variables
 if 'max_docs' not in st.session_state:
     st.session_state.max_docs = 10
@@ -43,31 +36,19 @@ if 'search_result' not in st.session_state:
 if 'authenticated' not in st.session_state:
     st.session_state['authenticated'] = False
 
-def display_summary(summary_text):
-    # Using larger font size for the title with HTML
-    st.markdown("""
-        <style>
-        .summary-title {
-            font-size: 24px;
-            font-weight: bold;
-        }
-        .summary-box {
-            border: 1px solid #aaa;
-            border-radius: 5px;
-            padding: 10px;
-            margin: 20px 0px;
-            background-color: #f9f9f9;
-        }
-        </style>
-        <div class="summary-title">Document Summary</div>
-    """, unsafe_allow_html=True)
-    
-    # Box around the summary
-    st.markdown(f"""
-        <div class="summary-box">
-            {summary_text}
-        </div>
-    """, unsafe_allow_html=True)
+class StreamHandler(BaseCallbackHandler):
+    def __init__(self, container, initial_text=f"***Document Summary***\n\n", display_method='markdown'):
+        self.container = container
+        self.text = initial_text
+        self.display_method = display_method
+
+    def on_llm_new_token(self, token: str, **kwargs) -> None:
+        self.text += token
+        display_function = getattr(self.container, self.display_method, None)
+        if display_function is not None:
+            display_function(self.text)
+        else:
+            raise ValueError(f"Invalid display_method: {self.display_method}")
 
 # Set up Streamlit layout and interface elements
 st.set_page_config(
@@ -126,6 +107,7 @@ if st.session_state['authenticated']:
 
 
         with st.spinner('Downloading and processing the document...'):
+                                   
             # Simulate progress
             progress_bar.progress(10)
 
@@ -160,7 +142,12 @@ if st.session_state['authenticated']:
 
         with st.spinner('Summarizing document...'):
 
-            if len(tokens) <= 120000:
+            # Placeholder for Output Box
+            output_placeholder = st.empty()
+            
+            stream_handler = StreamHandler(output_placeholder, display_method='write')
+            
+            if len(tokens) > 120000:
                 # Use Stuff Method for summarization
                 
                 # Define prompt
@@ -169,6 +156,27 @@ if st.session_state['authenticated']:
                 The summary should be structured in bulleted lists following the headings Core Argument, Evidence, and Conclusions.
                 CONCISE SUMMARY:"""
                 prompt = PromptTemplate.from_template(prompt_template)
+
+                # Define LLM 
+                
+                # Option 1: Azure
+                # llm = AzureChatOpenAI(
+                #     openai_api_version="2023-05-15",
+                #     azure_deployment="gpt-4-turbo-128K",
+                #     temperature=0,
+                #     seed=11,
+                #     streaming=True,
+                #     callbacks=[stream_handler]
+                # )
+                
+                # Option 2: OpenAI
+                llm = ChatOpenAI(
+                    model="gpt-4-turbo-preview",
+                    temperature=0,
+                    seed=11,
+                    streaming=True,
+                    callbacks=[stream_handler]
+                )
 
                 # Define LLM chain
                 llm_chain = LLMChain(llm=llm, prompt=prompt)
@@ -180,13 +188,49 @@ if st.session_state['authenticated']:
             else:
                 # Use Map-Reduce Method for summarization
                 
+                # Define LLM #1
+                # Option 1: Azure
+                # llm1 = AzureChatOpenAI(
+                #     openai_api_version="2023-05-15",
+                #     azure_deployment="gpt-4-turbo-128K",
+                #     temperature=0,
+                #     seed=11
+                # )                
+                
+                # Option 2: OpenAI
+                llm1 = ChatOpenAI(
+                    model="gpt-4-turbo-preview",
+                    temperature=0,
+                    seed=11
+                )
+
+                # Define LLM #2
+                # Option 1: Azure
+                # llm2 = AzureChatOpenAI(
+                #     openai_api_version="2023-05-15",
+                #     azure_deployment="gpt-4-turbo-128K",
+                #     temperature=0,
+                #     seed=11,
+                #     streaming=True,
+                #     callbacks=[stream_handler]
+                # )
+
+                # Option 2: OpenAI
+                llm2 = ChatOpenAI(
+                    model="gpt-4-turbo-preview",
+                    temperature=0,
+                    seed=11,
+                    streaming=True,
+                    callbacks=[stream_handler]
+                )                
+             
                 # Map
                 map_template = """The following is the content of a particular section of the document:
                 {docs}
                 Based on the content, please summarize key contents.
                 Helpful Answer:"""
                 map_prompt = PromptTemplate.from_template(map_template)
-                map_chain = LLMChain(llm=llm, prompt=map_prompt)
+                map_chain = LLMChain(llm=llm1, prompt=map_prompt)
                 
                 # Reduce
                 reduce_template = """The following is set of summaries:
@@ -197,7 +241,7 @@ if st.session_state['authenticated']:
                 reduce_prompt = PromptTemplate.from_template(reduce_template)
 
                 # Run chain
-                reduce_chain = LLMChain(llm=llm, prompt=reduce_prompt)
+                reduce_chain = LLMChain(llm=llm2, prompt=reduce_prompt)
 
                 # Takes a list of documents, combines them into a single string, and passes this to an LLMChain
                 combine_documents_chain = StuffDocumentsChain(
@@ -238,9 +282,6 @@ if st.session_state['authenticated']:
 
             # Clear the progress bar after completion
             progress_placeholder.empty()           
-
-            # Display summary
-            display_summary(f"\n{response['output_text']}")
 
     with col2:
         if st.session_state.search_result and selected_title:
