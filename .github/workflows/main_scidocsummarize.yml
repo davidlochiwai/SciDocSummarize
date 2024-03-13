@@ -2,7 +2,7 @@
 # More GitHub Actions for Azure: https://github.com/Azure/actions
 # More info on Python, GitHub Actions, and Azure App Service: https://aka.ms/python-webapps-actions
 
-name: Build and deploy Python app to Azure Web App - SciDocSummarize
+name: Build and deploy Python app to Azure Web App - scidocsummarize
 
 on:
   push:
@@ -65,14 +65,14 @@ jobs:
       - name: Login to Azure
         uses: azure/login@v1
         with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_4C18822C09E14CDD9C4361469B07E0F0 }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_88BBE44B218A4EFCADA3AEFB0B99767A }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_75322C5CB1BA46EB8389094F8EA3F018 }}
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_AAE849F9CFE1492583E897E5DDE29F86 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_4C5EFFA8059E48D3A3F06ED4793DCC61 }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_22C33B920EA647CF860698C09AA064DE }}
 
       - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v2
         id: deploy-to-webapp
         with:
-          app-name: 'SciDocSummarize'
+          app-name: 'scidocsummarize'
           slot-name: 'Production'
           
