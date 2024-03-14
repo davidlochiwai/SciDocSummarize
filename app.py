@@ -53,7 +53,7 @@ class StreamHandler(BaseCallbackHandler):
 # Set up Streamlit layout and interface elements
 st.set_page_config(
     page_title="ArXiv Document Search and Summarization",
-    page_icon="🤖",
+    page_icon="🔎",
     layout="wide",
     initial_sidebar_state="auto",
     menu_items={
@@ -72,7 +72,7 @@ if st.session_state['authenticated']:
     st.markdown("""
         <h1 style='font-size: 24px;'>ArXiv Document Search and Summarization</h1>
     """, unsafe_allow_html=True)
-    search_keywords = st.text_input('Input keywords for document search (e.g. artificial intelligence)', '')
+    search_keywords = st.text_input('Input keywords for document search:', placeholder = 'e.g. Artificial Intelligence')
 
     def ArXiv_Search(keywords):
         sort_criteria = arxiv.SortCriterion.SubmittedDate if st.session_state.sort_method == "Submission Date" else arxiv.SortCriterion.Relevance
@@ -313,6 +313,6 @@ else:
             st.session_state['authenticated'] = True
             # Refresh the page after a short delay
             time.sleep(1)
-            st.experimental_rerun()
+            st.rerun()
         else:
             st.error("Wrong Password.  Please retry!")
