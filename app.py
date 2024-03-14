@@ -153,7 +153,7 @@ if st.session_state['authenticated']:
                 # Define prompt
                 prompt_template = """Write a concise summary of the following:
                 "{text}"
-                The summary should be structured in bulleted lists following the headings Core Argument, Evidence, and Conclusions.
+                The summary should be structured in bulleted lists following the headings Argument, Evidence, and Conclusion.
                 CONCISE SUMMARY:"""
                 prompt = PromptTemplate.from_template(prompt_template)
 
@@ -222,7 +222,7 @@ if st.session_state['authenticated']:
                     seed=11,
                     streaming=True,
                     callbacks=[stream_handler]
-                )                
+                )            
              
                 # Map
                 map_template = """The following is the content of a particular section of the document:
@@ -236,7 +236,7 @@ if st.session_state['authenticated']:
                 reduce_template = """The following is set of summaries:
                 {docs}
                 Take these and distill it into a final, consolidated summary of the main themes.
-                The summary should be structured in bulleted lists following the headings Core Argument, Evidence, and Conclusions.
+                The summary should be structured in bulleted lists following the headings Argument, Evidence, and Conclusion.
                 Helpful Answer:"""
                 reduce_prompt = PromptTemplate.from_template(reduce_template)
 
