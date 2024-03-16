@@ -35,6 +35,8 @@ if 'search_result' not in st.session_state:
     st.session_state.search_result = []
 if 'authenticated' not in st.session_state:
     st.session_state['authenticated'] = False
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = 'search'
 
 class StreamHandler(BaseCallbackHandler):
     def __init__(self, container, initial_text=f"***Document Summary***\n\n", display_method='markdown'):
@@ -61,243 +63,268 @@ st.set_page_config(
     }
 )
 
-if st.session_state['authenticated']:
+def ArXiv_Search(keywords):
+    sort_criteria = arxiv.SortCriterion.SubmittedDate if st.session_state.sort_method == "Submission Date" else arxiv.SortCriterion.Relevance
+    search = arxiv.Search(query=keywords, max_results=st.session_state.max_docs, sort_by=sort_criteria)
+    result_list = []
+    for result in search.results():
+        result_dict = {
+            "id": result.get_short_id(),
+            "title": result.title,
+            "date_published": result.published,
+            "summary": result.summary,
+            "article_url": result.entry_id,
+            "pdf_url": result.pdf_url
+        }
+        result_list.append(result_dict)
+    return result_list
 
-    # Sidebar settings
-    st.sidebar.header('Settings')
-    st.session_state.max_docs = st.sidebar.slider("Maximum Number of Documents to Search", 1, 20, 10)
-    st.session_state.sort_method = st.sidebar.radio("Sorting Method of the Search", ["Relevance", "Submission Date"])
+def download_and_summarize_document(selected_doc, uploaded=False):
+    # Placeholder for the progress bar
+    progress_placeholder = st.empty()
+    progress_bar = progress_placeholder.progress(0)
 
-    # Main page for search
-    st.markdown("""
-        <h1 style='font-size: 24px;'>ArXiv Document Search and Summarization</h1>
-    """, unsafe_allow_html=True)
-    search_keywords = st.text_input('Input keywords for document search:', placeholder = 'e.g. Artificial Intelligence')
+    with st.spinner('Downloading and processing the document...'):
+                                
+        # Simulate progress
+        progress_bar.progress(10)
 
-    def ArXiv_Search(keywords):
-        sort_criteria = arxiv.SortCriterion.SubmittedDate if st.session_state.sort_method == "Submission Date" else arxiv.SortCriterion.Relevance
-        search = arxiv.Search(query=keywords, max_results=st.session_state.max_docs, sort_by=sort_criteria)
-        result_list = []
-        for result in search.results():
-            result_dict = {
-                "id": result.get_short_id(),
-                "title": result.title,
-                "date_published": result.published,
-                "summary": result.summary,
-                "article_url": result.entry_id,
-                "pdf_url": result.pdf_url
-            }
-            result_list.append(result_dict)
-        st.session_state.search_result = result_list
+        # Create directory if it doesn't exist
+        directory = './pdf_docs'
+        Path(directory).mkdir(parents=True, exist_ok=True)
 
-    if st.button('Search'):
-        ArXiv_Search(search_keywords)
-
-    # Display search results and selection
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        if st.session_state.search_result:
-            titles = [doc['title'] for doc in st.session_state.search_result]
-            selected_title = st.radio("Select a document to summarize", titles, index=0)
-
-    def download_and_summarize_document(selected_doc):
-        # Placeholder for the progress bar
-        progress_placeholder = st.empty()
-        progress_bar = progress_placeholder.progress(0)
-
-
-        with st.spinner('Downloading and processing the document...'):
-                                   
-            # Simulate progress
-            progress_bar.progress(10)
-
-            # Create directory if it doesn't exist
-            directory = './pdf_docs'
-            Path(directory).mkdir(parents=True, exist_ok=True)
-
+        if uploaded:
+            # Save the uploaded file temporarily for processing
+            with open(os.path.join(directory, selected_doc["pdf_url"].name), "wb") as f:
+                f.write(selected_doc["pdf_url"].getbuffer())
+            pdf_path = os.path.join(directory, selected_doc["pdf_url"].name)
+        else:
             # Download PDF
             target_id = selected_doc['id']
             paper = next(arxiv.Client().results(arxiv.Search(id_list=[target_id])))
             pdf_path = paper.download_pdf(directory)
+        
+        # Update progress after downloading
+        progress_bar.progress(30)
+
+        # Load PDF
+        loader = PyPDFLoader(pdf_path)
+        docs = loader.load()
+        
+        # Combine documents
+        pdf_text = " ".join(doc.page_content for doc in docs)
+        combined_doc = [Document(page_content=pdf_text)]
+        
+        # Tokenize and check length
+        tokenizer = tiktoken.get_encoding("cl100k_base")
+        tokens = tokenizer.encode(pdf_text)
+        
+        # Update progress after downloading
+        progress_bar.progress(50)        
+
+        # Summarize based on token length
+
+    with st.spinner('Summarizing document...'):
+
+        # Placeholder for Output Box
+        output_placeholder = st.empty()
+        
+        stream_handler = StreamHandler(output_placeholder, display_method='write')
+        
+        if len(tokens) <= 120000:
+            # Use Stuff Method for summarization
             
-            # Update progress after downloading
-            progress_bar.progress(30)
+            # Define prompt
+            prompt_template = """Write a concise summary of the following:
+            "{text}"
+            The summary should be structured in bulleted lists following the headings Argument, Evidence, and Conclusion.
+            CONCISE SUMMARY:"""
+            prompt = PromptTemplate.from_template(prompt_template)
 
-            # Load PDF
-            loader = PyPDFLoader(pdf_path)
-            docs = loader.load()
+            # Define LLM 
             
-            # Combine documents
-            pdf_text = " ".join(doc.page_content for doc in docs)
-            combined_doc = [Document(page_content=pdf_text)]
+            # Option 1: Azure
+            # llm = AzureChatOpenAI(
+            #     openai_api_version="2023-05-15",
+            #     azure_deployment="gpt-4-turbo-128K",
+            #     temperature=0,
+            #     seed=11,
+            #     streaming=True,
+            #     callbacks=[stream_handler]
+            # )
             
-            # Tokenize and check length
-            tokenizer = tiktoken.get_encoding("cl100k_base")
-            tokens = tokenizer.encode(pdf_text)
+            # Option 2: OpenAI
+            llm = ChatOpenAI(
+                model="gpt-4-turbo-preview",
+                temperature=0,
+                seed=11,
+                streaming=True,
+                callbacks=[stream_handler]
+            )
+
+            # Define LLM chain
+            llm_chain = LLMChain(llm=llm, prompt=prompt)
+
+            # Define StuffDocumentsChain
+            stuff_chain = StuffDocumentsChain(llm_chain=llm_chain, document_variable_name="text")
             
-            # Update progress after downloading
-            progress_bar.progress(50)        
-
-            # Summarize based on token length
-
-        with st.spinner('Summarizing document...'):
-
-            # Placeholder for Output Box
-            output_placeholder = st.empty()
+            response = stuff_chain.invoke(combined_doc)
+        else:
+            # Use Map-Reduce Method for summarization
             
-            stream_handler = StreamHandler(output_placeholder, display_method='write')
+            # Define LLM #1
+            # Option 1: Azure
+            # llm1 = AzureChatOpenAI(
+            #     openai_api_version="2023-05-15",
+            #     azure_deployment="gpt-4-turbo-128K",
+            #     temperature=0,
+            #     seed=11
+            # )                
             
-            if len(tokens) <= 120000:
-                # Use Stuff Method for summarization
-                
-                # Define prompt
-                prompt_template = """Write a concise summary of the following:
-                "{text}"
-                The summary should be structured in bulleted lists following the headings Argument, Evidence, and Conclusion.
-                CONCISE SUMMARY:"""
-                prompt = PromptTemplate.from_template(prompt_template)
+            # Option 2: OpenAI
+            llm1 = ChatOpenAI(
+                model="gpt-4-turbo-preview",
+                temperature=0,
+                seed=11
+            )
 
-                # Define LLM 
-                
-                # Option 1: Azure
-                # llm = AzureChatOpenAI(
-                #     openai_api_version="2023-05-15",
-                #     azure_deployment="gpt-4-turbo-128K",
-                #     temperature=0,
-                #     seed=11,
-                #     streaming=True,
-                #     callbacks=[stream_handler]
-                # )
-                
-                # Option 2: OpenAI
-                llm = ChatOpenAI(
-                    model="gpt-4-turbo-preview",
-                    temperature=0,
-                    seed=11,
-                    streaming=True,
-                    callbacks=[stream_handler]
-                )
+            # Define LLM #2
+            # Option 1: Azure
+            # llm2 = AzureChatOpenAI(
+            #     openai_api_version="2023-05-15",
+            #     azure_deployment="gpt-4-turbo-128K",
+            #     temperature=0,
+            #     seed=11,
+            #     streaming=True,
+            #     callbacks=[stream_handler]
+            # )
 
-                # Define LLM chain
-                llm_chain = LLMChain(llm=llm, prompt=prompt)
-
-                # Define StuffDocumentsChain
-                stuff_chain = StuffDocumentsChain(llm_chain=llm_chain, document_variable_name="text")
-                
-                response = stuff_chain.invoke(combined_doc)
-            else:
-                # Use Map-Reduce Method for summarization
-                
-                # Define LLM #1
-                # Option 1: Azure
-                # llm1 = AzureChatOpenAI(
-                #     openai_api_version="2023-05-15",
-                #     azure_deployment="gpt-4-turbo-128K",
-                #     temperature=0,
-                #     seed=11
-                # )                
-                
-                # Option 2: OpenAI
-                llm1 = ChatOpenAI(
-                    model="gpt-4-turbo-preview",
-                    temperature=0,
-                    seed=11
-                )
-
-                # Define LLM #2
-                # Option 1: Azure
-                # llm2 = AzureChatOpenAI(
-                #     openai_api_version="2023-05-15",
-                #     azure_deployment="gpt-4-turbo-128K",
-                #     temperature=0,
-                #     seed=11,
-                #     streaming=True,
-                #     callbacks=[stream_handler]
-                # )
-
-                # Option 2: OpenAI
-                llm2 = ChatOpenAI(
-                    model="gpt-4-turbo-preview",
-                    temperature=0,
-                    seed=11,
-                    streaming=True,
-                    callbacks=[stream_handler]
-                )            
-             
-                # Map
-                map_template = """The following is the content of a particular section of the document:
-                {docs}
-                Based on the content, please summarize key contents.
-                Helpful Answer:"""
-                map_prompt = PromptTemplate.from_template(map_template)
-                map_chain = LLMChain(llm=llm1, prompt=map_prompt)
-                
-                # Reduce
-                reduce_template = """The following is set of summaries:
-                {docs}
-                Take these and distill it into a final, consolidated summary of the main themes.
-                The summary should be structured in bulleted lists following the headings Argument, Evidence, and Conclusion.
-                Helpful Answer:"""
-                reduce_prompt = PromptTemplate.from_template(reduce_template)
-
-                # Run chain
-                reduce_chain = LLMChain(llm=llm2, prompt=reduce_prompt)
-
-                # Takes a list of documents, combines them into a single string, and passes this to an LLMChain
-                combine_documents_chain = StuffDocumentsChain(
-                    llm_chain=reduce_chain, document_variable_name="docs"
-                )
-
-                # Combines and iteratively reduces the mapped documents
-                reduce_documents_chain = ReduceDocumentsChain(
-                    # This is final chain that is called.
-                    combine_documents_chain=combine_documents_chain,
-                    # If documents exceed context for `StuffDocumentsChain`
-                    collapse_documents_chain=combine_documents_chain,
-                    # The maximum number of tokens to group documents into.
-                    token_max=120000,
-                )
-
-                # Combining documents by mapping a chain over them, then combining results
-                map_reduce_chain = MapReduceDocumentsChain(
-                    # Map chain
-                    llm_chain=map_chain,
-                    # Reduce chain
-                    reduce_documents_chain=reduce_documents_chain,
-                    # The variable name in the llm_chain to put the documents in
-                    document_variable_name="docs",
-                    # Return the results of the map steps in the output
-                    return_intermediate_steps=False,
-                )
-
-                text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-                    chunk_size=120000, chunk_overlap=1000
-                )
-                split_docs = text_splitter.split_documents(combined_doc)
-                
-                response = map_reduce_chain.invoke(split_docs)
+            # Option 2: OpenAI
+            llm2 = ChatOpenAI(
+                model="gpt-4-turbo-preview",
+                temperature=0,
+                seed=11,
+                streaming=True,
+                callbacks=[stream_handler]
+            )            
             
-            # Complete the progress
-            progress_bar.progress(100)
+            # Map
+            map_template = """The following is the content of a particular section of the document:
+            {docs}
+            Based on the content, please summarize key contents.
+            Helpful Answer:"""
+            map_prompt = PromptTemplate.from_template(map_template)
+            map_chain = LLMChain(llm=llm1, prompt=map_prompt)
+            
+            # Reduce
+            reduce_template = """The following is set of summaries:
+            {docs}
+            Take these and distill it into a final, consolidated summary of the main themes.
+            The summary should be structured in bulleted lists following the headings Argument, Evidence, and Conclusion.
+            Helpful Answer:"""
+            reduce_prompt = PromptTemplate.from_template(reduce_template)
 
-            # Clear the progress bar after completion
-            progress_placeholder.empty()           
+            # Run chain
+            reduce_chain = LLMChain(llm=llm2, prompt=reduce_prompt)
 
-    with col2:
-        if st.session_state.search_result and selected_title:
-            selected_doc = next((doc for doc in st.session_state.search_result if doc['title'] == selected_title), None)
-            if selected_doc:
-                # Display document information
-                st.markdown(f"**ID:** {selected_doc['id']}")
-                st.markdown(f"**Title:** {selected_doc['title']}")
-                st.markdown(f"**Published:** {selected_doc['date_published']}")
-                st.markdown(f"**Abstract:** {selected_doc['summary']}")
-                st.markdown(f"**Article URL:** [Link]({selected_doc['article_url']})")
-                st.markdown(f"**PDF URL:** [Link]({selected_doc['pdf_url']})", unsafe_allow_html=True)
-                
-                # Add Summarize button and handle summarization
-                if st.button('Summarize'):
-                    download_and_summarize_document(selected_doc)
+            # Takes a list of documents, combines them into a single string, and passes this to an LLMChain
+            combine_documents_chain = StuffDocumentsChain(
+                llm_chain=reduce_chain, document_variable_name="docs"
+            )
+
+            # Combines and iteratively reduces the mapped documents
+            reduce_documents_chain = ReduceDocumentsChain(
+                # This is final chain that is called.
+                combine_documents_chain=combine_documents_chain,
+                # If documents exceed context for `StuffDocumentsChain`
+                collapse_documents_chain=combine_documents_chain,
+                # The maximum number of tokens to group documents into.
+                token_max=120000,
+            )
+
+            # Combining documents by mapping a chain over them, then combining results
+            map_reduce_chain = MapReduceDocumentsChain(
+                # Map chain
+                llm_chain=map_chain,
+                # Reduce chain
+                reduce_documents_chain=reduce_documents_chain,
+                # The variable name in the llm_chain to put the documents in
+                document_variable_name="docs",
+                # Return the results of the map steps in the output
+                return_intermediate_steps=False,
+            )
+
+            text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+                chunk_size=120000, chunk_overlap=1000
+            )
+            split_docs = text_splitter.split_documents(combined_doc)
+            
+            response = map_reduce_chain.invoke(split_docs)
+        
+        # Complete the progress
+        progress_bar.progress(100)
+
+        # Clear the progress bar after completion
+        progress_placeholder.empty()           
+
+def document_upload_page():
+    uploaded_file = st.file_uploader("Choose a PDF file", type='pdf')
+    if uploaded_file is not None:
+        download_and_summarize_document({"pdf_url": uploaded_file}, uploaded=True)
+
+
+if st.session_state['authenticated']:
+    # Page navigation
+    page_options = ['Search through ArXiv', 'Upload Document']
+    st.session_state.current_page = st.sidebar.selectbox('Document Source:', page_options)
+
+    if st.session_state.current_page == 'Search through ArXiv':
+
+        # Sidebar settings
+        st.sidebar.header('Settings')
+        st.session_state.max_docs = st.sidebar.slider("Maximum Number of Documents to Search", 1, 20, 10)
+        st.session_state.sort_method = st.sidebar.radio("Sorting Method of the Search", ["Relevance", "Submission Date"])
+
+        # Main page for search
+        st.markdown("""
+            <h1 style='font-size: 24px;'>ArXiv Document Search and Summarization</h1>
+        """, unsafe_allow_html=True)
+        search_keywords = st.text_input('Input keywords for document search:', placeholder = 'e.g. Artificial Intelligence')
+
+        if st.button('Search'):
+            st.session_state.search_result = ArXiv_Search(search_keywords)
+
+        # Display search results and selection
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            if st.session_state.search_result:
+                titles = [doc['title'] for doc in st.session_state.search_result]
+                selected_title = st.radio("Select a document to summarize", titles, index=0)
+
+        with col2:
+            if st.session_state.search_result and selected_title:
+                selected_doc = next((doc for doc in st.session_state.search_result if doc['title'] == selected_title), None)
+                if selected_doc:
+                    # Display document information
+                    st.markdown(f"**ID:** {selected_doc['id']}")
+                    st.markdown(f"**Title:** {selected_doc['title']}")
+                    st.markdown(f"**Published:** {selected_doc['date_published']}")
+                    st.markdown(f"**Abstract:** {selected_doc['summary']}")
+                    st.markdown(f"**Article URL:** [Link]({selected_doc['article_url']})")
+                    st.markdown(f"**PDF URL:** [Link]({selected_doc['pdf_url']})", unsafe_allow_html=True)
+                    
+                    # Add Summarize button and handle summarization
+                    if st.button('Summarize'):
+                        download_and_summarize_document(selected_doc)
+        pass
+    elif st.session_state.current_page == 'Upload Document':
+        
+        # Main page for upload document
+        st.markdown("""
+            <h1 style='font-size: 24px;'>Documnet Upload and Summarization</h1>
+        """, unsafe_allow_html=True)       
+        document_upload_page()
+    
 else:
     st.title("Welcome to ArXiv Document Search and Summarization Engine")
 
