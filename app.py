@@ -26,6 +26,9 @@ stored_password = os.getenv("APP_PASSWORD")
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
 os.environ["LANGCHAIN_PROJECT"] = "SDSC6002"
 
+# Define the default summary format at the beginning of your script
+DEFAULT_SUMMARY_FORMAT = 'Bulleted lists following the headings Argument, Evidence, and Conclusion'
+
 # Initialize session state variables
 if 'max_docs' not in st.session_state:
     st.session_state.max_docs = 10
@@ -37,6 +40,10 @@ if 'authenticated' not in st.session_state:
     st.session_state['authenticated'] = False
 if 'current_page' not in st.session_state:
     st.session_state.current_page = 'search'
+if 'summary_format' not in st.session_state:
+    st.session_state.summary_format = DEFAULT_SUMMARY_FORMAT
+if 'reset_summary_format' not in st.session_state:
+    st.session_state.reset_summary_format = False
 
 class StreamHandler(BaseCallbackHandler):
     def __init__(self, container, initial_text=f"***Document Summary***\n\n", display_method='markdown'):
@@ -137,8 +144,7 @@ def download_and_summarize_document(selected_doc, uploaded=False):
             # Define prompt
             prompt_template = """Write a concise summary of the following:
             "{text}"
-            The summary should be structured in bulleted lists following the headings Argument, Evidence, and Conclusion.
-            CONCISE SUMMARY:"""
+            The summary should be structured in the following format:\n""""" + st.session_state.summary_format + """""\nCONCISE SUMMARY:"""
             prompt = PromptTemplate.from_template(prompt_template)
 
             # Define LLM 
@@ -220,8 +226,7 @@ def download_and_summarize_document(selected_doc, uploaded=False):
             reduce_template = """The following is set of summaries:
             {docs}
             Take these and distill it into a final, consolidated summary of the main themes.
-            The summary should be structured in bulleted lists following the headings Argument, Evidence, and Conclusion.
-            Helpful Answer:"""
+            The summary should be structured in the following format:\n""""" + st.session_state.summary_format + """""\nCONCISE SUMMARY:"""
             reduce_prompt = PromptTemplate.from_template(reduce_template)
 
             # Run chain
@@ -277,14 +282,33 @@ if st.session_state['authenticated']:
     # Page navigation
     page_options = ['Search through ArXiv', 'Upload Document']
     st.session_state.current_page = st.sidebar.selectbox('Document Source:', page_options)
+    
+    st.sidebar.header('Customization')
+    
+    # Check the reset flag before declaring the text_area widget
+    if st.session_state.reset_summary_format:
+        st.session_state.summary_format = DEFAULT_SUMMARY_FORMAT
+        st.session_state.reset_summary_format = False  # Reset the flag
+    
+    # Now declare your text_area without modifying `summary_format` directly
+    st.sidebar.text_area('Customize Summary Format',
+                         value=st.session_state.summary_format,
+                         key="summary_format",
+                         help="Alter the summary format as needed. Use headings like Argument, Evidence, and Conclusion.")
+    
+    # Button to trigger resetting the summary format
+    if st.sidebar.button('Reset to Default Format'):
+        st.session_state.reset_summary_format = True  # Set the flag to reset format
+        # Force a rerun to apply the reset logic immediately
+        st.rerun()
 
     if st.session_state.current_page == 'Search through ArXiv':
 
         # Sidebar settings
-        st.sidebar.header('Settings')
+        st.sidebar.header('ArXiv Search Settings')
         st.session_state.max_docs = st.sidebar.slider("Maximum Number of Documents to Search", 1, 20, 10)
         st.session_state.sort_method = st.sidebar.radio("Sorting Method of the Search", ["Relevance", "Submission Date"])
-
+       
         # Main page for search
         st.markdown("""
             <h1 style='font-size: 24px;'>ArXiv Document Search and Summarization</h1>
