@@ -4,6 +4,7 @@ import arxiv
 from pathlib import Path
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_openai import AzureChatOpenAI, ChatOpenAI
+from langchain_mistralai.chat_models import ChatMistralAI
 from langchain.chains.combine_documents.stuff import StuffDocumentsChain
 from langchain.chains import MapReduceDocumentsChain, ReduceDocumentsChain
 from langchain.chains.llm import LLMChain
@@ -39,14 +40,18 @@ if 'search_result' not in st.session_state:
 if 'authenticated' not in st.session_state:
     st.session_state['authenticated'] = False
 if 'current_page' not in st.session_state:
-    st.session_state.current_page = 'search'
+    st.session_state.current_page = 'Search through ArXiv'
 if 'summary_format' not in st.session_state:
     st.session_state.summary_format = DEFAULT_SUMMARY_FORMAT
 if 'reset_summary_format' not in st.session_state:
     st.session_state.reset_summary_format = False
+if 'model_selection' not in st.session_state:
+    st.session_state.model_selection = 'OpenAI GPT-4'
+if 'llm_token_limit' not in st.session_state:
+    st.session_state.llm_token_limit = 125000  # Default token limit for OpenAI
 
 class StreamHandler(BaseCallbackHandler):
-    def __init__(self, container, initial_text=f"***Document Summary***\n\n", display_method='markdown'):
+    def __init__(self, container, initial_text=f"***Document Summary by OpenAI GPT-4***\n\n", display_method='markdown'):
         self.container = container
         self.text = initial_text
         self.display_method = display_method
@@ -138,7 +143,7 @@ def download_and_summarize_document(selected_doc, uploaded=False):
         
         stream_handler = StreamHandler(output_placeholder, display_method='write')
         
-        if len(tokens) <= 120000:
+        if len(tokens) <= st.session_state.llm_token_limit:
             # Use Stuff Method for summarization
             
             # Define prompt
@@ -148,25 +153,19 @@ def download_and_summarize_document(selected_doc, uploaded=False):
             prompt = PromptTemplate.from_template(prompt_template)
 
             # Define LLM 
-            
-            # Option 1: Azure
-            # llm = AzureChatOpenAI(
-            #     openai_api_version="2023-05-15",
-            #     azure_deployment="gpt-4-turbo-128K",
-            #     temperature=0,
-            #     seed=11,
-            #     streaming=True,
-            #     callbacks=[stream_handler]
-            # )
-            
-            # Option 2: OpenAI
-            llm = ChatOpenAI(
-                model="gpt-4-turbo-preview",
-                temperature=0,
-                seed=11,
-                streaming=True,
-                callbacks=[stream_handler]
-            )
+            if st.session_state.model_selection == 'Mistral 7B':
+                llm = ChatMistralAI(model="open-mistral-7b", temperature=0)
+                # Adapt callbacks and streaming handling for Mistral 7B
+                use_streaming = False
+            else:
+                llm = ChatOpenAI(
+                    model="gpt-4-turbo-preview",
+                    temperature=0,
+                    seed=11,
+                    streaming=True,
+                    callbacks=[stream_handler]
+                )
+                use_streaming = True
 
             # Define LLM chain
             llm_chain = LLMChain(llm=llm, prompt=prompt)
@@ -175,44 +174,35 @@ def download_and_summarize_document(selected_doc, uploaded=False):
             stuff_chain = StuffDocumentsChain(llm_chain=llm_chain, document_variable_name="text")
             
             response = stuff_chain.invoke(combined_doc)
+
+            if not use_streaming:
+                st.markdown("***Document Summary by Mistral 7B***")
+                st.markdown(response["output_text"])
+                
+
         else:
             # Use Map-Reduce Method for summarization
             
-            # Define LLM #1
-            # Option 1: Azure
-            # llm1 = AzureChatOpenAI(
-            #     openai_api_version="2023-05-15",
-            #     azure_deployment="gpt-4-turbo-128K",
-            #     temperature=0,
-            #     seed=11
-            # )                
-            
-            # Option 2: OpenAI
-            llm1 = ChatOpenAI(
-                model="gpt-4-turbo-preview",
-                temperature=0,
-                seed=11
-            )
-
-            # Define LLM #2
-            # Option 1: Azure
-            # llm2 = AzureChatOpenAI(
-            #     openai_api_version="2023-05-15",
-            #     azure_deployment="gpt-4-turbo-128K",
-            #     temperature=0,
-            #     seed=11,
-            #     streaming=True,
-            #     callbacks=[stream_handler]
-            # )
-
-            # Option 2: OpenAI
-            llm2 = ChatOpenAI(
-                model="gpt-4-turbo-preview",
-                temperature=0,
-                seed=11,
-                streaming=True,
-                callbacks=[stream_handler]
-            )            
+            # Define LLM
+            if st.session_state.model_selection == 'Mistral 7B':
+                llm1 = ChatMistralAI(model="open-mistral-7b", temperature=0)
+                llm2 = ChatMistralAI(model="open-mistral-7b", temperature=0)
+                # Adapt callbacks and streaming handling for Mistral 7B
+                use_streaming = False
+            else:
+                llm1 = ChatOpenAI(
+                    model="gpt-4-turbo-preview",
+                    temperature=0,
+                    seed=11
+                )
+                llm2 = ChatOpenAI(
+                    model="gpt-4-turbo-preview",
+                    temperature=0,
+                    seed=11,
+                    streaming=True,
+                    callbacks=[stream_handler]
+                )
+                use_streaming = True      
             
             # Map
             map_template = """The following is the content of a particular section of the document:
@@ -244,7 +234,7 @@ def download_and_summarize_document(selected_doc, uploaded=False):
                 # If documents exceed context for `StuffDocumentsChain`
                 collapse_documents_chain=combine_documents_chain,
                 # The maximum number of tokens to group documents into.
-                token_max=120000,
+                token_max=st.session_state.llm_token_limit,
             )
 
             # Combining documents by mapping a chain over them, then combining results
@@ -260,17 +250,20 @@ def download_and_summarize_document(selected_doc, uploaded=False):
             )
 
             text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-                chunk_size=120000, chunk_overlap=1000
+                chunk_size=st.session_state.llm_token_limit, chunk_overlap=1000
             )
             split_docs = text_splitter.split_documents(combined_doc)
             
             response = map_reduce_chain.invoke(split_docs)
+            if not use_streaming:
+                st.markdown("***Document Summary by Mistral 7B***")
+                st.markdown(response["output_text"])
         
         # Complete the progress
         progress_bar.progress(100)
 
         # Clear the progress bar after completion
-        progress_placeholder.empty()           
+        progress_placeholder.empty()   
 
 def document_upload_page():
     uploaded_file = st.file_uploader("Choose a PDF file", type='pdf')
@@ -301,6 +294,19 @@ if st.session_state['authenticated']:
         st.session_state.reset_summary_format = True  # Set the flag to reset format
         # Force a rerun to apply the reset logic immediately
         st.rerun()
+
+    # Selection box for the model
+    st.sidebar.header('Model Selection')
+    st.session_state.model_selection = st.sidebar.selectbox(
+        'Choose the model for summarization:',
+        ['OpenAI GPT-4', 'Mistral 7B']
+    )
+
+    # Set llm_token_limit based on the selected model
+    if st.session_state.model_selection == 'OpenAI':
+        st.session_state.llm_token_limit = 125000
+    else:
+        st.session_state.llm_token_limit = 29000  # Assuming Mistral 7B has a lower token limit
 
     if st.session_state.current_page == 'Search through ArXiv':
 
